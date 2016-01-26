@@ -1,8 +1,11 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS -Wall #-}
 module Derive where
 
+import Data.Monoid
+import Data.Typeable
 import Language.Haskell.TH
-import Language.Haskell.TH.Lib
+import Language.Haskell.TH.Syntax
 
 --deriveFoldable ''Tree
 --deriveFunctor ''Tree
@@ -22,42 +25,79 @@ instance Foldable Tree where
 
 -}
 
--- | Derives a clause of the 'foldMap' definition.
-genFoldMapClause :: Name -> Name -> Con -> Q Clause
-genFoldMapClause tyVar f (NormalC consName bangTypes) = do
-  xs <- mapM (const (newName "x")) bangTypes
-  clause (pats f consName xs) (body xs bangTypes) []
+mkFoldableBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
+mkFoldableBody _consName f xs fieldTypes = normalB $
+  foldr genBody [| mempty |] (xs `zip` fieldTypes)
   where
-    pats f cons vars = [varP f, conP cons (map varP vars)]
-    body vars bangTypes = normalB $ foldr genBody [| mempty |] (vars `zip` bangTypes)
-    genBody (x, (_, clauseTy)) body = 
-      case clauseTy of
-      VarT tyVar' | tyVar == tyVar' ->
-        [| $(varE f) $(varE x) `mappend` $body |]
-      ConT ty `AppT` VarT tyVar' | tyVar == tyVar' ->
-        [| foldMap $(varE f) $(varE x) `mappend` $body |]
-      _ -> [| mempty `mappend` $body |]
+    genBody (x, (_, fieldType)) body = do
+      Just (Config _ _ fun typeCon typeVar) <- getQ
+      case fieldType of
+        VarT typeVar' | typeVar' == typeVar ->
+          [| $(varE f) $(varE x) <> $body |]
+        ConT typeCon' `AppT` VarT typeVar' |
+          typeCon == typeCon' && typeVar' == typeVar ->
+            [| $(varE fun) $(varE f) $(varE x) <> $body |]
+        _ -> [| mempty <> $body |]
+
+mkFunctorBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
+mkFunctorBody consName f xs fieldTypes = normalB $
+  appsE $ conE consName : map newFieldType (xs `zip` fieldTypes)
+  where
+    newFieldType (x, (_, fieldType)) = do
+      Just (Config _ _ fun typeCon typeVar) <- getQ
+      case fieldType of
+        VarT typeVar' | typeVar' == typeVar ->
+          [| $(varE f) $(varE x) |]
+        ConT typeCon' `AppT` VarT typeVar' | typeCon == typeCon' &&
+          typeVar' == typeVar -> [| $(varE fun) $(varE f) $(varE x) |]
+        _ -> [| $(varE x) |]
+
+-- | Derives a clause of the 'foldMap' definition.
+genFunClause :: Name
+             -> (Name -> Name -> [Name] -> [StrictType] -> Q Body)
+             -> Con
+             -> Q Clause
+genFunClause f mkBody (NormalC consName fieldTypes) = do
+  xs <- mapM (const (newName "x")) fieldTypes
+  clause (pats xs) (mkBody consName f xs fieldTypes) []
+  where
+    pats xs = varP f:[conP consName (map varP xs)]
+genFunClause _ _ _ =
+  fail "genFunClause: did not match NormalC constructor type."
 
 -- | Derives the foldMap definition when deriving the 'Foldable' instance.
-genFoldMapDecl :: Name -> [Con] -> Q Dec
-genFoldMapDecl tyVar constructors = do
+genFunDecl :: [Con] -> Q Dec
+genFunDecl constructors = do
+  Just (Config configType _ fun _ _) <- getQ
   f <- newName "f"
-  funD 'foldMap (map (genFoldMapClause tyVar f) constructors)
+  mkBody <- case configType of
+    FoldableConfig -> return mkFoldableBody
+    FunctorConfig  -> return mkFunctorBody
+  funD fun (map (genFunClause f mkBody) constructors)
 
--- deriveInstanceFor :: Name -> Name -> Q [Dec]
--- deriveInstanceFor typeClass typeName = do
---   (TyConI (DataD _ _ [(KindedTV typeVar StarT)] constructors _)) <- reify typeName
---   let instanceType = ConT typeClass `AppT` ConT typeVar
---   decl <- genFoldMapDecl typeVar constructors
---   return [InstanceD [] instanceType [foldMap]]
-  
+
+data ConfigType = FoldableConfig | FunctorConfig
+data InstanceConfig
+  = Config { configType :: ConfigType
+           , typeClass  :: Name -- Foldable or Functor
+           , fun        :: Name -- which function to derive
+           , typeCon    :: Name -- type constructor to derive the class instance for
+           , typeVar    :: Name -- type constructor's variable.
+           } deriving ( Typeable )
+
+deriveInstanceFor :: ConfigType -> Name -> Name -> Name -> Q [Dec]
+deriveInstanceFor configType typeClass fun typeCon = do
+  (TyConI (DataD _ _ typeVars constructors _)) <- reify typeCon
+  let (KindedTV typeVar StarT) = last typeVars
+      instanceType             = ConT typeClass `AppT` ConT typeCon
+  putQ $ Config configType typeClass fun typeCon typeVar
+  funDecl <- genFunDecl constructors
+  return [InstanceD [] instanceType [funDecl]]
+
 -- | Derives a 'Foldable' instance for the data type referred to by 'Name'.
 deriveFoldable :: Name -> Q [Dec]
-deriveFoldable ty = do
-  (TyConI (DataD _ _ [(KindedTV tyVar StarT)] constructors _)) <- reify ty
-  let instanceType = ConT ''Foldable `AppT` ConT ty
-  foldMap <- genFoldMapDecl tyVar constructors
-  return [InstanceD [] instanceType [foldMap]]
+deriveFoldable ty = deriveInstanceFor FoldableConfig ''Foldable 'foldMap ty
 
+-- | Derives a 'Functor' instance for the data type referred to by 'Name'.
 deriveFunctor :: Name -> Q [Dec]
-deriveFunctor ty = undefined
+deriveFunctor ty = deriveInstanceFor FunctorConfig ''Functor 'fmap ty
