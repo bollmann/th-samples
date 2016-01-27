@@ -44,7 +44,8 @@ tmap' i n = do
       extract k = appE (tsel k n) (varE t)
   lamE [varP f, varP t] $ tupE $ prefix ++ [new] ++ suffix
 
--- | Folds any tuple according to the given folding function.
+-- | Folds any n-tuple according to the given folding function.
+tfoldr :: Int -> ExpQ
 tfoldr = undefined -- TODO!
 
 -- | Converts the first n elements from a list into an n-tuple
@@ -58,13 +59,10 @@ tflatten :: Lift t => t -> ExpQ
 tflatten t = do
   u <- [| t |]
   case u of
-    t@(TupE _) -> tupE (flatten u)
-    _          -> fail "tflatten: can only be called on tuples!"
-  where
-    flatten r =
-      case r of
-        TupE es -> concatMap (\e -> flatten e) es
-        x -> [return x]
+    TupE _ -> tupE (flatten u)
+    _      -> fail "tflatten: can only be called on tuples!"
+  where flatten (TupE es) = concatMap (\e -> flatten e) es
+        flatten x         = [return x]
 
 fact = [| \ f n ->
   case n of
