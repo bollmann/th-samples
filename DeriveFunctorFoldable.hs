@@ -3,14 +3,15 @@
 This example uses Template Haskell to simulate very basic versions of
 the GHC extensions -XDeriveFoldable and -XDeriveFunctor.
 
-For instance, consider the following data-type definitions:
+For instance, consider the following datatype definitions:
 
 data Option a = None | Some a
 data List   a = Nil | Cons a (List a)
 data Tree   a = Leaf a | Node (Tree a) a (Tree a)
 
-Instead of manually deriving the straightforward and repetitive
-Functor and/or Foldable instances, one can now write:
+Instead of manually writing the straightforward and repetitive
+Functor and/or Foldable instances, we can use Template Haskell to
+derive these automatically:
 
 deriveFunctor  'Option -- or 'List or 'Tree
 deriveFoldable 'Option -- or 'List or 'Tree
@@ -30,19 +31,21 @@ import Language.Haskell.TH.Syntax
 
 -- | Derives a 'Foldable' instance for the data type referred to by 'Name'.
 deriveFoldable :: Name -> Q [Dec]
-deriveFoldable ty = deriveInstanceFor FoldableConfig ''Foldable 'foldMap ty
+deriveFoldable ty
+  = deriveInstanceFor FoldableConfig ''Foldable 'foldMap ty
 
 -- | Derives a 'Functor' instance for the data type referred to by 'Name'.
 deriveFunctor :: Name -> Q [Dec]
-deriveFunctor ty = deriveInstanceFor FunctorConfig ''Functor 'fmap ty
+deriveFunctor ty
+  = deriveInstanceFor FunctorConfig ''Functor 'fmap ty
 
 data ConfigType = FoldableConfig | FunctorConfig
 data InstanceConfig
   = Config { configType :: ConfigType
-           , typeClass  :: Name -- which typeclass to create a new instance for.
-           , fun        :: Name -- which function to derive in that typeclass.
-           , typeCon    :: Name -- type constructor to derive the class instance for.
-           , typeVar    :: Name -- type constructor's variable.
+           , typeClass  :: Name -- ^ which typeclass to create a new instance for.
+           , fun        :: Name -- ^ which function to derive in that typeclass.
+           , typeCon    :: Name -- ^ type constructor to derive the class instance for.
+           , typeVar    :: Name -- ^ type constructor's variable.
            } deriving ( Typeable )
 
 -- | Derives an instance as specified by 'ConfigType'
@@ -81,8 +84,8 @@ genFunClause _ _ _ =
 
 -- | Derives the body of one clause of the 'foldMap' function.
 mkFoldableBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
-mkFoldableBody _consName f xs fieldTypes = normalB $
-  foldr genBody [| mempty |] (xs `zip` fieldTypes)
+mkFoldableBody _consName f xs fieldTypes
+  = normalB $ foldr genBody [| mempty |] (xs `zip` fieldTypes)
   where
     genBody (x, (_, fieldType)) body = do
       Just (Config _ _ fun typeCon typeVar) <- getQ
@@ -96,8 +99,8 @@ mkFoldableBody _consName f xs fieldTypes = normalB $
 
 -- | Derives the body of one clause of the 'fmap' function.
 mkFunctorBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
-mkFunctorBody consName f xs fieldTypes = normalB $
-  appsE $ conE consName : map newFieldType (xs `zip` fieldTypes)
+mkFunctorBody consName f xs fieldTypes
+  = normalB $ appsE $ conE consName : map newFieldType (xs `zip` fieldTypes)
   where
     newFieldType (x, (_, fieldType)) = do
       Just (Config _ _ fun typeCon typeVar) <- getQ
