@@ -71,7 +71,7 @@ mkMap name n = do
   zs <- replicateM n (newName "zs")
   lists <- newName "lists"
   [| \ f@ $(varP g) lists@ $(tupP $ map varP zs) ->
-    -- can we pattern splice many parameters at once? e.g., \ f zs1 zs2 .. zsN ?
+  -- TODO: can we pattern splice many parameters at once? e.g., \ f zs1 zs2 .. zsn ?
        case lists of
          $(allCons xs ys) -> $(appsE (varE g:map varE xs)) : -- see TODO below
                              $(appsE [varE name, varE g, tupE (map varE ys)])
@@ -82,13 +82,11 @@ mkMap name n = do
                            | (x,y) <- xs `zip` ys]
 
 -- TODO (see above TODO note):
--- what's wrong with putting following instead:
--- foldl ($) f [ $(varE x) | x <- xs]
---
+-- what's wrong with putting the following instead:
+-- > foldl ($) f [ $(varE x) | x <- xs]
 -- ???
 
--- | Generates the above `mapk` functions in the range [1..n], where n
--- is the given upper bound to genMaps.
+-- | Generates the above `mapk` functions in the range [1..n].
 genMaps :: Int -> Q [Dec]
 genMaps n = mapM mapN [1..n]
 
