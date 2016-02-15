@@ -130,6 +130,5 @@ regexpParser = P.try alts <|> (P.eof *> pure Empty)
                  <|> star
     star       = P.try (Star <$> (char <* P.char '*'))
                  <|> P.try (Star <$> (P.char '(' *> alts <* P.string ")*"))
-                         -- <|> P.char '(' *> alts <* P.string ")*")
                  <|> char
     specials   = "[]()*|"
