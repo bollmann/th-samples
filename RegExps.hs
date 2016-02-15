@@ -10,7 +10,7 @@ For instance, consider a regular expression to check an email address:
 validDotComMail = "([a-z]|[A-Z]|[0-9])*@([a-z]|[A-Z])*.com"
 
 This regular expression, despite being specified as a string, can then
-be compiled to its AST form, hereby checking if its syntactically
+be compiled to its AST form, hereby checking that it is syntactically
 wellformed:
 
 $(compile validDotComMail)
@@ -76,10 +76,11 @@ instance Lift RegExp where
 apply :: Name -> [Q Exp] -> Q Exp
 apply n = foldl (\r e -> appE r e) (conE n)
 
+-- | Checks if the 'RegExp' `r` matches the given string `s`.
 match :: RegExp -> String -> Bool
 match r s = nullable (foldl deriv r s)
 
--- | `nullable r` return `True` when `r` matches the empty string
+-- | `nullable r` returns `True` when `r` matches the empty string
 nullable :: RegExp -> Bool
 nullable (Char _ _) = False
 nullable (Alt r1 r2) = nullable r1 || nullable r2

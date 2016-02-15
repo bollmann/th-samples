@@ -1,6 +1,6 @@
-module DeriveTest where
+module DeriveFunctorFoldableTest where
 
-import Derive (deriveFoldable, deriveFunctor)
+import DeriveFunctorFoldable (deriveFoldable, deriveFunctor)
 
 data Tree   a = Nil | Leaf a | Node (Tree a) (Tree a) deriving ( Show )
 data Tree'  a = Leaf' a | Node' (Tree' a) a (Tree' a) deriving ( Show )
@@ -20,7 +20,7 @@ deriveFunctor ''Tree
 deriveFunctor ''Tree'
 deriveFunctor ''List
 deriveFunctor ''Option
-deriveFunctor ''StringError
+--deriveFunctor ''StringError
 
 sampleTree :: Tree Int
 sampleTree = Node (Node (Leaf 2) Nil) (Node (Node (Node (Leaf 9) (Leaf 3)) Nil) (Leaf 1))

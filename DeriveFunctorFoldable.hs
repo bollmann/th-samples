@@ -19,7 +19,7 @@ deriveFoldable 'Option -- or 'List or 'Tree
 -}
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS -Wall -fno-warn-name-shadowing #-}
-module Derive (
+module DeriveFunctorFoldable (
   deriveFoldable,
   deriveFunctor
   ) where
