@@ -13,7 +13,7 @@ map3 :: (a1 -> a2 -> a3 -> r) -> [a1] -> [a2] -> [a3] -> [r]
 map3 f (x:xs) (y:ys) (z:zs) = f x y z : map3 f xs ys zs
 map3 _ _      _      _      = []
 
-$(genmaps 3) ===>
+$(genMaps 3) ===>
 
 map1 :: (a1 -> r) -> [a1] -> [r]
 map1 = ...
@@ -26,13 +26,14 @@ map3 = ...
 
 -}
 
-{-# LANGUAGE TemplateHaskell, QuasiQuotes #-}
-module GenericMap (
-  mapN,
-  mapN',
-  genMaps,
-  ) where
+{-# LANGUAGE TemplateHaskell #-}
+module GenericMap ( mapN
+                  , mapN'
+                  , genMaps
+                  , genMapTests
+                  ) where
 
+import Control.Applicative
 import Control.Monad
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
@@ -55,6 +56,40 @@ mapN n
                   rest  = apply (varE name) (f:ys)
               clause argPatts (normalB [| $first : $rest |]) []
     cl2  = clause (replicate (n+1) wildP) (normalB (conE '[])) []
+
+-- | Generates the above `mapk` functions in the range [1..n].
+genMaps :: Int -> Q [Dec]
+genMaps n = mapM mapN [1..n]
+
+-- | Generate QuickCheck test cases for each of the generated mapN
+-- functions to test them equivalent to the Applicative versions of
+-- ZipList.
+--
+-- Generates properties of the following form:
+--
+-- prop_map3Equiv :: (Eq a, Eq b, Eq c) => [a] -> [b] -> [c] -> Bool
+-- prop_map3Equiv xs ys zs =
+--   map3 (,,) xs ys zs
+--   == (getZipList $ (,,) <$> ZipList xs <*> ZipList ys <*> ZipList zs)
+--
+mapTestN :: Int -> Q Dec
+mapTestN n = do
+  xs <- sequence $ replicate n (newName "xs")
+  let testName  = mkName $ "prop_map" ++ show n ++ "Equiv"
+      mapn      = mkName $ "map" ++ show n
+      property  = normalB $ [| $actual == getZipList $expected |]
+      actual    = foldl (\f x -> [| $f $(varE x) |]) [| $(varE mapn) $ntup |] xs
+      expected  = foldl (\f x -> [| $f <*> ZipList $(varE x) |]) [| pure $ntup |] xs
+      ntup      = genTupleN n
+  funD testName [clause (map varP xs) property []]
+
+genTupleN :: Int -> Q Exp
+genTupleN n = do
+  xs <- sequence $ replicate n (newName "x")
+  lamE (map varP xs) (tupE (map varE xs))
+
+genMapTests :: Int -> Q [Dec]
+genMapTests n = mapM mapTestN [1..n]
 
 -- | Constructs the same generic map function using even more (?)
 -- quotes and splices.
@@ -85,8 +120,4 @@ mkMap name n = do
 -- what's wrong with putting the following instead:
 -- > foldl ($) f [ $(varE x) | x <- xs]
 -- ???
-
--- | Generates the above `mapk` functions in the range [1..n].
-genMaps :: Int -> Q [Dec]
-genMaps n = mapM mapN [1..n]
 
