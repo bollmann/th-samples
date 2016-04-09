@@ -74,7 +74,7 @@ instance Lift RegExp where
   lift (Mark r1)     = apply 'Mark  (map lift [r1])
 
 apply :: Name -> [Q Exp] -> Q Exp
-apply n = foldl (\r e -> appE r e) (conE n)
+apply n = foldl appE (conE n)
 
 -- | Checks if the 'RegExp' `r` matches the given string `s`.
 match :: RegExp -> String -> Bool
