@@ -4,7 +4,7 @@ Mostly inspired from the samples on:
 https://wiki.haskell.org/Template_Haskell
 
 -}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, RankNTypes #-}
 module Sandbox where
 
 import Control.Monad
@@ -13,12 +13,55 @@ import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 
 -- | Selects the ith component of an n-tuple
-tsel :: Int -> Int -> ExpQ -- n-tuple a -> a
-tsel i n = [| \t -> $(caseE [| t |] [alt]) |]
-  where alt  = match (tupP pats) body []
-        pats = map varP xs
-        xs   = [ mkName ("x" ++ show k) | k <- [1..n] ]
-        body = normalB . varE $ xs !! (i-1)
+
+tsel :: Int -> Int -> ExpQ
+tsel k n = do
+  xs <- replicateM n (newName "x")
+  let ntuple  = TupP (map VarP xs)
+      kthElem = VarE (xs !! (k-1))
+  return $ LamE [ntuple] kthElem
+
+-- projects an n-ary function to its kth argument.
+proj :: Int -> Int -> ExpQ
+proj k n = do
+  xs <- replicateM n (newName "x")
+  let kthElem = VarE (xs !! (k - 1))
+      args    = map VarP xs
+  return $ LamE args kthElem
+
+simpleCurryN :: Int -> ExpQ
+simpleCurryN n = do
+  xs <- replicateM n (newName "x")
+  let inTup  = TupP (map VarP xs)
+      outFun = foldr (\x acc -> LamE [(VarP x)] acc) (VarE (last xs)) (init xs)
+  return $ LamE [inTup] outFun
+
+-- | curries a function f :: (t1, t2, ..., tn) -> t to its curried
+-- equivalent: f' :: t1 -> t2 -> ... -> tn -> t.
+curryN :: Int -> ExpQ
+curryN n = do
+  f  <- newName "f"
+  xs <- replicateM n (newName "x")
+  let args = map VarP (f:xs)
+      ntup = TupE (map VarE xs)
+  return $ LamE args (AppE (VarE f) ntup)
+
+-- | Uncurries a function f' :: t1 -> t2 -> ... -> tn -> t. to its
+-- uncurried form: f :: (t1, t2, ..., tn) -> t.
+uncurryN :: Int -> ExpQ
+uncurryN n = do
+  f  <- newName "f"
+  xs <- replicateM n (newName "x")
+  let ntup = TupP (map VarP xs)
+      app  = foldl AppE (VarE f) (map VarE xs)
+  return $ LamE [VarP f, ntup] app
+
+uncurryN' :: Int -> ExpQ
+uncurryN' n = do
+  xs <- replicateM n (newName "x")
+  let ntup  = tupP (map varP xs)
+      app f = foldl (\g x -> [| $g $x |]) (varE f) (map varE xs)
+  [| \f $(ntup) -> $(app 'f) |]
 
 -- | Maps a function over the ith component of an n-tuple
 tmap :: Int -> Int -> Q Exp
@@ -44,8 +87,7 @@ tmap' i n = do
       extract k = appE (tsel k n) (varE t)
   lamE [varP f, varP t] $ tupE $ prefix ++ [new] ++ suffix
 
--- | Folds any n-tuple according to the given folding function.
-tfoldr :: Int -> ExpQ
+-- | Folds any tuple according to the given folding function.
 tfoldr = undefined -- TODO!
 
 -- | Converts the first n elements from a list into an n-tuple
@@ -54,6 +96,8 @@ listToNTuple n = do
   l <- newName "l"
   lamE [varP l] $ tupE (map (\ i -> [| $(varE l) !! (i-1) |]) [1..n])
 
+-- Flattening tuples:
+
 -- | Flattens a tuple.
 tflatten :: Lift t => t -> ExpQ
 tflatten t = do
@@ -61,8 +105,40 @@ tflatten t = do
   case u of
     TupE _ -> tupE (flatten u)
     _      -> fail "tflatten: can only be called on tuples!"
-  where flatten (TupE es) = concatMap (\e -> flatten e) es
-        flatten x         = [return x]
+  where
+    flatten (TupE es) = concatMap (\e -> flatten e) es
+    flatten x         = [return x]
+
+-- | Flattens a tuple of size n differently.
+tflattenN :: Int -> ExpQ
+tflattenN n = do
+  f <- newName "f"
+  t <- newName "t"
+  xs <- mapM (const (newName "x")) [1..n]
+  lamE [varP f, varP t] $ caseE (varE t) [isTuple f xs, otherwise t]
+  where
+    isTuple f xs = match (tupP (map varP xs)) (recur f xs) []
+    recur = undefined
+    -- recur f xs   = normalB $ [|
+    --  concat [ $(varE f) $(varE x) | x <- xs ] |]
+    otherwise t  = match wildP (normalB (listE [varE t])) []
+
+{-
+
+$tflatten' :: cont -> n-tuple -> m-tuple
+tflatten = \cont t -> case t of
+  some n'-tuple t' -> concatMap cont t'_i for all i <- [1..n']
+  x                -> [x]
+-}
+
+-- tflatten' :: ExpQ
+-- tflatten' = do
+--   t <- newName "t"
+--   let (tp, te) = (varP t, varE t)
+--   lamE [varP t] $ [|
+--     case $(VarE t) of
+--       TupE _ -> tupE (flatten $(varE t))
+--       _      -> fail "tflatten: can only be called on tuples!" |]
 
 fact = [| \ f n ->
   case n of
