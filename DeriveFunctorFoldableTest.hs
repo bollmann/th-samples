@@ -11,6 +11,7 @@ data Tree'  a = Leaf' a | Node' (Tree' a) a (Tree' a) deriving Show
 data List   a = Empty | Cons a (List a) deriving Show
 data Option a = None | Some a deriving Show
 data Error a b = Err a | Ok b deriving Show
+data Foobar a b c = Foo a b c | Bar String Int (Foobar a b c)
 
 type StringError = Error String
 
@@ -18,13 +19,17 @@ deriveFoldable ''Tree
 deriveFoldable ''Tree'
 deriveFoldable ''List
 deriveFoldable ''Option
-deriveFoldable ''StringError
+deriveFoldable ''Error
+deriveFoldable ''Foobar
+--deriveFoldable ''StringError
 
 deriveFunctor ''Tree
 deriveFunctor ''Tree'
 deriveFunctor ''List
 deriveFunctor ''Option
-deriveFunctor ''StringError
+deriveFunctor ''Error
+deriveFunctor ''Foobar
+--deriveFunctor ''StringError
 
 sampleTree :: Tree Int
 sampleTree = Node (Node (Leaf 1) Nil) (Node (Node (Node (Leaf 2) (Leaf 3)) Nil) (Leaf 4))

@@ -31,71 +31,50 @@ import Language.Haskell.TH.Syntax
 -- | Derives a 'Foldable' instance for the data type referred to by 'Name'.
 deriveFoldable :: Name -> Q [Dec]
 deriveFoldable ty
-  = deriveInstanceFor FoldableConfig ''Foldable 'foldMap ty
+  = deriveInstanceFor FoldableDeriving ''Foldable 'foldMap ty
 
 -- | Derives a 'Functor' instance for the data type referred to by 'Name'.
 deriveFunctor :: Name -> Q [Dec]
 deriveFunctor ty
-  = deriveInstanceFor FunctorConfig ''Functor 'fmap ty
+  = deriveInstanceFor FunctorDeriving ''Functor 'fmap ty
 
-data ConfigType = FoldableConfig | FunctorConfig
-data InstanceConfig
-  = Config ConfigType
-           Name -- ^ which typeclass to create a new instance
-           Name -- ^ which function to derive in that
-           Name -- ^ type constructor to derive the class instance for.
-           Name -- ^ type constructor's variable.
-    
+data DerivingType = FoldableDeriving | FunctorDeriving
+data InstanceDeriving
+  = Deriving
+      { what :: DerivingType
+      , typeClass :: Name -- ^ which typeclass to create a new instance for
+      , function  :: Name -- ^ which function to derive in that typeclass
+      , tyCon     :: Name -- ^ type constructor to derive the class instance for.
+      , tyVar     :: Name -- ^ type constructor's variable.
+      }
+
 -- | Derives an instance as specified by 'ConfigType'
-deriveInstanceFor :: ConfigType -> Name -> Name -> Name -> Q [Dec]
-deriveInstanceFor configType typeClass fun ty = do
-  (TyConI decl) <- reify ty
-  realTyCon <- getRealTypeCon decl
-  (tyConName, typeVars, constructors) <- case realTyCon of
-    DataD _ nm tys cs _   -> return (nm, tys, cs)
-    NewtypeD _ nm tys c _ -> return (nm, tys, [c])
-    _                     ->
-      fail "deriveInstanceFor: realTyCon is a type synonym."
-    
-  let (KindedTV typeVar StarT) = last typeVars
-      instanceType             = ConT typeClass `AppT`
-        (foldl apply (ConT tyConName) (init typeVars))
-  putQ $ Config configType typeClass fun tyConName typeVar
-  funDecl <- genFunDecl constructors
-  return [InstanceD [] instanceType [funDecl]]
-  where
-    apply t var
-      | PlainTV name    <- var = AppT t (VarT name)
-      | KindedTV name _ <- var = AppT t (VarT name)
-      | otherwise              = error "apply: can't happen."
+deriveInstanceFor :: DerivingType -> Name -> Name -> Name -> Q [Dec]
+deriveInstanceFor derivingType typeClass fun ty = do
+  (TyConI tyCon) <- reify ty
+  (tyConName, tyVars, cs) <- case tyCon of
+    DataD _ nm tyVars cs _   -> return (nm, tyVars, cs)
+    NewtypeD _ nm tyVars c _ -> return (nm, tyVars, [c])
+    _ -> fail "deriveInstanceFor: tyCon may not be a type synonym."
 
-getRealTypeCon :: Dec -> Q Dec
-getRealTypeCon d@(DataD{})    = return d
-getRealTypeCon n@(NewtypeD{}) = return n
-getRealTypeCon (TySynD _ _ ty)      = do
-  case extrTyName ty of
-    Nothing     ->
-      fail $ "getRealTypeCon: couldn't get the real type of " ++ show ty
-    Just tcName -> do
-      (TyConI tyDecl) <- reify tcName
-      return tyDecl
+  let (KindedTV tyVar StarT) = last tyVars
+      instanceType             = conT typeClass `appT`
+        (foldl apply (conT tyConName) (init tyVars))
+  putQ $ Deriving derivingType typeClass fun tyConName tyVar
+  sequence [instanceD (return []) instanceType [genFunDecl cs]]
   where
-    extrTyName (AppT t1 _) = extrTyName t1
-    extrTyName (ConT nm)    = Just nm
-    extrTyName _            = Nothing
-getRealTypeCon d            =
-  fail $  "getRealTypeCon: can only chase the real type for type declarations, "
-       ++ "but got: " ++ show d
+    apply t (PlainTV name)    = appT t (varT name)
+    apply t (KindedTV name _) = appT t (varT name)
 
 -- | Derives the 'foldMap' definition when deriving a 'Foldable' instance;
 -- | derives the 'fmap' definition when deriving a 'Functor' instance.
 genFunDecl :: [Con] -> Q Dec
 genFunDecl constructors = do
-  Just (Config configType _ fun _ _) <- getQ
+  Just (Deriving derivingType _ fun _ _) <- getQ
   f <- newName "f"
-  mkBody <- case configType of
-    FoldableConfig -> return mkFoldableBody
-    FunctorConfig  -> return mkFunctorBody
+  mkBody <- case derivingType of
+    FoldableDeriving -> return mkFoldMapBody
+    FunctorDeriving  -> return mkFmapBody
   funD fun (map (genFunClause f mkBody) constructors)
 
 -- | Derives a clause of the 'foldMap'/'fmap' definition.
@@ -112,31 +91,36 @@ genFunClause _ _ _ =
   fail "genFunClause: data-type definition must contain only 'NormalC' constructors."
 
 -- | Derives the body of one clause of the 'foldMap' function.
-mkFoldableBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
-mkFoldableBody _consName f fields fieldTypes
+mkFoldMapBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
+mkFoldMapBody _consName f fields fieldTypes
   = normalB $ foldr genBody [| mempty |] (fields `zip` fieldTypes)
   where
     genBody (field, (_, fieldType)) body = do
-      Just (Config _ _ fun typeCon typeVar) <- getQ
+      Just (Deriving _ _ fun typeCon typeVar) <- getQ
       case fieldType of
         VarT typeVar' | typeVar' == typeVar ->
           [| $(varE f) $(varE field) <> $body |]
-        ConT typeCon' `AppT` VarT typeVar' |
-          typeCon == typeCon' && typeVar' == typeVar ->
+        ty `AppT` VarT typeVar' |
+          leftmost ty == (ConT typeCon) && typeVar' == typeVar ->
             [| $(varE fun) $(varE f) $(varE field) <> $body |]
         _ -> [| mempty <> $body |]
 
 -- | Derives the body of one clause of the 'fmap' function.
-mkFunctorBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
-mkFunctorBody consName f xs fieldTypes
+mkFmapBody :: Name -> Name -> [Name] -> [StrictType] -> Q Body
+mkFmapBody consName f xs fieldTypes
   = normalB $ appsE $ conE consName : map newFieldType (xs `zip` fieldTypes)
   where
     newFieldType (x, (_, fieldType)) = do
-      Just (Config _ _ fun typeCon typeVar) <- getQ
+      Just (Deriving _ _ fun typeCon typeVar) <- getQ
       case fieldType of
         VarT typeVar' | typeVar' == typeVar ->
           [| $(varE f) $(varE x) |]
-        ConT typeCon' `AppT` VarT typeVar' |
-          typeCon == typeCon' && typeVar' == typeVar ->
+        ty `AppT` VarT typeVar' |
+          leftmost ty == (ConT typeCon) && typeVar' == typeVar ->
             [| $(varE fun) $(varE f) $(varE x) |]
         _ -> [| $(varE x) |]
+
+-- | Extracts the leftmost type.
+leftmost :: Type -> Type
+leftmost (AppT ty1 _) = leftmost ty1
+leftmost ty           = ty
