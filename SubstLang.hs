@@ -44,7 +44,9 @@ module SubstLang where
 
 import Language.Haskell.TH
 import Language.Haskell.TH.Quote
-import Text.Parsec as P
+
+import Text.Parsec ((<|>))
+import qualified Text.Parsec as P
 
 data SubstLang
   = Var   String
@@ -54,13 +56,12 @@ data SubstLang
 
 subst :: QuasiQuoter
 subst = QuasiQuoter {
-    quoteExp  = buildTH . parseSubstLang
+    quoteExp  = buildTH . parse
   , quotePat  = notHandled "patterns"
   , quoteType = notHandled "types"
   , quoteDec  = notHandled "declarations"
-  } where notHandled thing =
-            error $ "html: only expression parsing is supported, "
-                 ++ "but you requested to parse " ++ thing ++ "."
+  } where notHandled things =
+            error $ things ++ " are not handled by the subst quasiquoter."
 
 buildTH :: SubstLang -> Q Exp
 buildTH (Var   s)  = varE (mkName s)
@@ -68,12 +69,12 @@ buildTH (Lit   s)  = stringE s
 buildTH (Parts ps) = foldr cat [| "" |] (map buildTH ps)
  where cat tl acc = [| $tl ++ $acc |]
 
-parseSubstLang :: String -> SubstLang
-parseSubstLang str = case P.parse parser "" str of
+parse :: String -> SubstLang
+parse str = case P.parse parser "" str of
   Left err -> error $ "parseSubstLang:" ++ show err
   Right tl -> tl
   where
     parser  = Parts <$> P.many (P.try var <|> lit) <* P.eof
     var     = Var <$> (P.char '$' *>
-                       P.char '{' *> P.many1 (P.noneOf "}") <* P.char '}')
+                        P.char '{' *> P.many1 (P.noneOf "}") <* P.char '}')
     lit     = Lit <$> P.many1 (P.noneOf "$")
