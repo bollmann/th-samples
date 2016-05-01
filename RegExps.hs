@@ -1,22 +1,23 @@
 {- Type-safe regular expressions using Template Haskell.
 
-This example shows how to use TH to implement type-safe regular
-expressions (*). The user may specify regular expressions conveniently
-as a string and yet receives static guarantees that the regular
-expression is syntactically correct.
+This example shows how to use Template Haskell and Quasi Quotes to
+implement type-safe regular expressions (*). The user may specify
+regular expressions conveniently as a string and yet receives static
+guarantees that the regular expression is syntactically correct.
 
-For instance, consider a regular expression to check an email address:
+For instance, consider a regular expression to check the
+wellformedness of an email address:
 
-alphaNums       = "([a-z]|[A-Z]|[0-9])*"
-validDotComMail = "${alphaNums}*@${alphaNums}.com"
+chars           = [regex|[a-z]|[A-Z]|[0-9]|]
+someChars       = [regex|${chars}${chars}*|]
+validDotComMail = [regex|${someChars}@${someChars}.com|]
 
-This regular expression, despite being specified as a string, can then
-be compiled to its AST form, hereby checking that it is syntactically
-wellformed:
+Using quasi quotes, this regular expression can be specified in its
+concrete syntax. Moreover, larger regular expressions can easily be
+built from smaller expressions with the interpolation ${..} operator,
+which splices sub regexes into larger ones.
 
-$(compile validDotComMail)
-
-Malformed regular expressions are thus detected and excluded at
+Thus, illformed regular expressions are detected and excluded at
 compile-time of the Haskell module.
 
 (*) The example is based on homework #5 of Penn's CIS 552 course.
@@ -25,7 +26,6 @@ compile-time of the Haskell module.
 module RegExps where
 
 import Control.Monad.Identity
-import Control.Applicative
 import Data.Data
 import Data.List
 import Data.Set (Set)
@@ -33,16 +33,16 @@ import Language.Haskell.TH hiding (match)
 import Language.Haskell.TH.Syntax
 import Language.Haskell.TH.Quote
 import qualified Data.Set as Set
-import qualified Text.Parsec as P
+import Text.Parsec as P hiding (Empty)
 
 data RegExp
   = Char (Set Char)          -- literal characters
-  | Var String               -- a variable holding another regexp
   | Alt RegExp RegExp        -- r1 | r2   (alternation)
   | Seq RegExp RegExp        -- r1 r2     (concatenation)
   | Star RegExp              -- r*        (Kleene star)
   | Empty                    -- ε, accepts empty string
   | Void                     -- ∅, always fails
+  | Var String               -- a variable holding another regexp
   deriving Show
 
 instance Lift a => Lift (Set a) where
@@ -56,7 +56,7 @@ instance Lift RegExp where
   lift (Star r1)     = apply 'Star  (map lift [r1])
   lift Empty         = apply 'Empty []
   lift Void          = apply 'Void  []
-  lift (Var r)       = varE (mkName r)
+  lift (Var r)       = foldl1 appE $ map (varE . mkName) (words r)
 
 apply :: Name -> [Q Exp] -> Q Exp
 apply n = foldl appE (conE n)
@@ -96,29 +96,33 @@ deriv (Var _) _       = Void
 -- AST form using TH.
 compile :: String -> Q (TExp RegExp)
 compile s =
-  case P.parse regexParser "" s of
+  case parse regexParser "" s of
     Left  err    -> fail (show err)
     Right regexp -> [e|| regexp ||]
 
 -- | Parses the given regular expression into the 'RegExp' datatype.
-regexParser :: P.Parsec String () RegExp
-regexParser = P.try alts <|> (P.eof *> pure Empty)
-  where
-    atom       = P.try var <|> char
-    var        = Var <$> (P.string "${" *> some (P.noneOf "}") <* P.char '}')
-    char       = P.try charclass <|> singlechar
-    singlechar = (Char . Set.singleton) <$> P.noneOf specials
-    charclass  = fmap (Char . Set.fromList) $ P.char '[' *> content <* P.char ']'
-    content    = (concat <$> P.manyTill range (P.lookAhead (P.char ']')))
-                   <|> some (P.noneOf specials)
-    range      = enumFromTo <$> (P.anyChar <* P.char '-') <*> P.anyChar
-    alts       = P.try (Alt <$> seqs <*> (P.char '|' *> alts)) <|> seqs
-    seqs       = P.try (Seq <$> star <*> seqs) <|> star
-    star       = P.try (Star <$> (atom <* P.char '*'))
-                   <|> P.try (Star <$> (P.char '(' *> alts <* P.string ")*"))
-                   <|> atom
-    specials   = "[]()*|"
+regexParser :: Parsec String () RegExp
+regexParser = alts <* eof where
+  atom       = try var <|> char
+  var        = Var <$> (string "${" *> many1 (noneOf "}") <* P.char '}')
+  char       = charclass <|> singlechar
+  singlechar = (Char . Set.singleton) <$> noneOf specials
+  charclass  = fmap (Char . Set.fromList) $
+                 P.char '[' *> content <* P.char ']'
+  content    = try (concat <$> many1 range)
+                   <|> many1 (noneOf specials)
+  range      = enumFromTo
+                 <$> (noneOf specials <* P.char '-')
+                 <*> noneOf specials
+  alts       = try (Alt <$> seqs <*> (P.char '|' *> alts)) <|> seqs
+  seqs       = try (Seq <$> star <*> seqs) <|> star
+  star       = try (Star <$> (atom <* P.char '*'))
+                 <|> try (Star <$> (P.char '(' *> alts <* string ")*"))
+                 <|> atom
+  specials   = "[]()*|"
 
+-- | A quasi quoter for embedding the regular expression language into
+-- Haskell.
 regex :: QuasiQuoter
 regex = QuasiQuoter {
     quoteExp = unTypeQ . compile
